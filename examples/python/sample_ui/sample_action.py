@@ -8,8 +8,8 @@ from common import Rx, Ry, Rz
 from sample_action_form import Ui_MainWindow
 
 import PySide6.QtAsyncio as QtAsyncio
-from PySide6.QtWidgets import *
-from PySide6.QtCore import *
+from PySide6.QtWidgets import QMainWindow, QApplication
+from PySide6.QtCore import QTimer
 
 GREEN_COLOR_CODE = '#57965C'
 RED_COLOR_CODE = '#C94F4F'

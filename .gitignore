@@ -7,6 +7,7 @@ build*
 octave-workspace
 
 CMakeUserPresets.json
+CMakeFiles
 
 __pycache__
 poetry.lock

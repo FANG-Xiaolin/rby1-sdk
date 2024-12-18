@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <robot name="RB_Y1_V1.0.1">
+<<<<<<< HEAD
     <mobile type="differential" xyz="0.228 0 0" rpy="0 0 0" joints="right_wheel left_wheel"
             params="0.53 0.1"/> <!-- wheel_base, wheel_radius -->
 
@@ -640,6 +641,19 @@
         </visual>
     </link>
 
+    <link name="rby1_camera_mount">
+      <!-- <inertial> -->
+      <!--   <mass value="0.0221" /> -->
+      <!--   <origin rpy="0 0 0" xyz="0.0 0.0 0.0" /> -->
+      <!-- </inertial> -->
+
+      <visual>
+        <geometry>
+          <mesh filename="./meshes/rby1_camera_mount_v1.obj" />
+        </geometry>
+      </visual>
+    </link>
+
 
     <!-- Joints -->
     <joint name="right_wheel" type="continuous">
@@ -1041,11 +1055,11 @@
         <limit effort="1000" velocity="3.14" lower="-0.35" upper="1.57"/>
     </joint>
 
-    <!-- <joint name="head_mount" type="fixed">
+    <joint name="head_mount" type="fixed">
       <parent link="link_head_2"/>
-      <child link="Arbitrary device"/>
-      <origin rpy="0.0 0.0 0.0" xyz="0.022 0.0 0.04"/>
+      <child link="rby1_camera_mount"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.04"/>
       <axis xyz="0 0 1"/>
-    </joint> -->
+    </joint>
 
 </robot>

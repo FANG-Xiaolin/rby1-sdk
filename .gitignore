@@ -1,3 +1,7 @@
+scripts/local_config.py
+*.pyc
+*.swp
+
 .venv
 .vscode
 .idea

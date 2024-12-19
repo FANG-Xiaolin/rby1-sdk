@@ -101,7 +101,7 @@ class RubyPybulletController(RobotController):
         for joint_name_to_config in joint_traj:
             self.set_joint_confs_by_name(joint_name_to_config)
 
-    def get_current_joint_confs_by_name(self, joint_names) -> np.ndarray:
+    def get_current_joint_confs_by_name(self, joint_names : list[str]) -> np.ndarray:
         return self.bullet_client.world.get_batched_qpos(joint_names)
 
     def get_ik_solution_for_link(self, link_name, link_target_pose, seed_conf=None, return_all=False, n_proposals=20):
@@ -168,32 +168,59 @@ class RubyPybulletController(RobotController):
         return False
 
 class RubyRealworldController(RobotController):
-    def __init__(self, urdf_path, base_link_name, tool_link_names):
+    def __init__(self, urdf_path, base_link_name, tool_link_names, home_config):
         super().__init__(urdf_path, base_link_name, tool_link_names)
-        context = zmq.Context()
-        socket = context.socket(zmq.REQ)
-        socket.connect(f"tcp://{UPC_IP}:{UPC_PORT}")
-        self.socket = socket
-        self.camera_intrinsics = None
-        self.image_dim = None
-        self.capture_rs = None
+        from concepts.hw_interface.rby1.client import RBY1InterfaceClient
+        self.client = RBY1InterfaceClient(UPC_IP)
+        self.home_config = home_config
 
-    def record_body_readings_for_Nsec(self, timeout=10):
-        self.socket.send(zlib.compress(pickle.dumps({"message_name": "record_body_readings_for_Nsec",
-                                                     'timeout': timeout
-                                                     })))
-        message = pickle.loads(zlib.decompress(self.socket.recv()))
-        return message['recorded_state']
+    def convert_to_client_format(self, joint_name_to_config : dict):
+        return {
+                'left': np.array([joint_name_to_config.get(f'left_arm_{i}', self.home_config[f'left_arm_{i}']) for i in range(7)]),
+                'right': np.array([joint_name_to_config.get(f'right_arm_{i}', self.home_config[f'right_arm_{i}']) for i in range(7)]),
+                'torso': np.array([joint_name_to_config.get(f'torso_{i}', self.home_config[f'torso_{i}']) for i in range(6)]),
+        }
+
+    def convert_from_client_format(self, joint_pos_client_format : list[dict]):
+        return {
+            **{f'left_arm_{i}':qpos for i, qpos in enumerate(joint_pos_client_format['left'])},
+            **{f'right_arm_{i}':qpos for i, qpos in enumerate(joint_pos_client_format['right'])},
+            **{f'torso_{i}':qpos for i, qpos in enumerate(joint_pos_client_format['torso'])}
+        }
+
+    def execute_joint_traj(self, joint_traj: list[dict]):
+        self.client.move_qpos_trajectory([self.convert_to_client_format(joint_name_to_config) for joint_name_to_config in joint_traj])
+
+    def get_current_joint_confs_by_name(self, joint_names : list[str]) -> np.ndarray:
+        all_joint_name_to_config = self.convert_from_client_format(self.client.get_qpos())
+        return np.array([all_joint_name_to_config[name] for name in joint_names])
+
+    def go_to_home(self):
+        joint_names = self.home_config.keys()
+        current_config = self.get_current_joint_confs_by_name(joint_names)
+        target_config = np.array([self.home_config[jn] for jn in joint_names])
+        interpolated_trajectory = interpolate_trajectory([current_config, target_config])
+        self.execute_joint_traj([{jointname: val for jointname, val in zip(joint_names, step_i_vals)} for step_i_vals in interpolated_trajectory])
 
 
-    def replay_traj(self, recorded_traj):
-        self.socket.send(zlib.compress(pickle.dumps({"message_name": "replay_traj",
-                                                     'recorded_state': recorded_traj
-                                                })))
-        message = pickle.loads(zlib.decompress(self.socket.recv()))
-        return message
+#     def record_body_readings_for_Nsec(self, timeout=10):
+#         self.socket.send(zlib.compress(pickle.dumps({"message_name": "record_body_readings_for_Nsec",
+#                                                      'timeout': timeout
+#                                                      })))
+#         message = pickle.loads(zlib.decompress(self.socket.recv()))
+#         return message['recorded_state']
 
-def initialize_robot_controller(robot_urdf_path, base_link_name, tool_link_names, home_config, debug=False, vis=False):
+
+#     def replay_traj(self, recorded_traj):
+#         self.socket.send(zlib.compress(pickle.dumps({"message_name": "replay_traj",
+#                                                      'recorded_state': recorded_traj
+#                                                 })))
+#         message = pickle.loads(zlib.decompress(self.socket.recv()))
+#         return message
+
+
+
+def initialize_robot_controller(robot_urdf_path, base_link_name, tool_link_names, home_config, debug=True, vis=False):
     robot_pybullet_controller = RubyPybulletController(
             urdf_path=robot_urdf_path,
             base_link_name=base_link_name,
@@ -207,7 +234,8 @@ def initialize_robot_controller(robot_urdf_path, base_link_name, tool_link_names
         robot_realworld_controller = RubyRealworldController(
             urdf_path=robot_urdf_path,
             base_link_name=base_link_name,
-            tool_link_names=tool_link_names
+            tool_link_names=tool_link_names,
+            home_config=home_config
     )
     return robot_pybullet_controller, robot_realworld_controller
     #########################
@@ -235,7 +263,7 @@ def create_pybullet_box(pb_client:BulletClient, size:list, pose_mat4:np.ndarray,
     box_in_pb = pb.createMultiBody(baseCollisionShapeIndex=collisionShapeId, baseVisualShapeIndex=visualShapeId, physicsClientId=pb_client.client_id)
     return box_in_pb
 
-def interpolate_trajectory(qpos_list: list[np.ndarray], max_delta_distance=0.03) -> list[np.ndarray]:
+def interpolate_trajectory(qpos_list: list[np.ndarray], max_delta_distance=0.05) -> list[np.ndarray]:
     interpolated_trajectory = [qpos_list[0]]
     for qpos_next in qpos_list[1:]:
         steps = int(max(((qpos_next - interpolated_trajectory[-1]) / max_delta_distance).max(),1))
@@ -244,8 +272,10 @@ def interpolate_trajectory(qpos_list: list[np.ndarray], max_delta_distance=0.03)
 
 def goto_tgt(args):
     tool_link_names = ['ee_finger_r1']
-    robot_pybullet_controller, _ = initialize_robot_controller(URDF_PATH, base_link_name='base', tool_link_names=tool_link_names, home_config=HOME_CONFIG, debug=True, vis=args.vis)
-
+    print(f'>>> initializing controllers')
+    robot_pybullet_controller, robot_realworld_controller = initialize_robot_controller(URDF_PATH, base_link_name='base', tool_link_names=tool_link_names, home_config=HOME_CONFIG, debug=not args.realworld, vis=args.vis)
+    print(f'>>> controller initialization finished')
+ 
     box_pose_mat = np.eye(4)
     box_pose_mat[:3, 3] = [.6, 0, 1.1]
 
@@ -262,10 +292,18 @@ def goto_tgt(args):
         ik_solution_selected_val = np.array([ik_solution_selected[jn] for jn in iksolver_jointnames])
         interpolated_trajectory = interpolate_trajectory([np.zeros_like(ik_solution_selected_val), ik_solution_selected_val], max_delta_distance=5e-2)
         robot_pybullet_controller.reset_home()
-        robot_pybullet_controller.execute_joint_traj([{jointname: val for jointname, val in zip(iksolver_jointnames, step_i_vals)} for step_i_vals in interpolated_trajectory])
-
+        joint_traj = [{jointname: val for jointname, val in zip(iksolver_jointnames, step_i_vals)} for step_i_vals in interpolated_trajectory]
+        robot_pybullet_controller.execute_joint_traj(joint_traj)
+        if robot_realworld_controller is None:
+            break
+        realworld_execute_or_not = input('Execute in real world? [y/N]')
+        if realworld_execute_or_not.strip().lower().startswith('y'):
+            robot_realworld_controller.execute_joint_traj(joint_traj)
+ 
     robot_pybullet_controller.bullet_client.wait_for_user()
     robot_pybullet_controller.go_to_home()
+    if robot_realworld_controller is not None:
+        robot_realworld_controller.go_to_home()
     robot_pybullet_controller.bullet_client.wait_for_user()
 
 def select_ik_solution(robot_pybullet_controller, tool_link_name, tgt_pose):
@@ -282,7 +320,7 @@ def select_ik_solution(robot_pybullet_controller, tool_link_name, tgt_pose):
 
 def grasping_test(args):
     tool_link_names = ['ee_finger_r1', 'ee_finger_l1']
-    robot_pybullet_controller, _ = initialize_robot_controller(URDF_PATH, base_link_name='base', tool_link_names=tool_link_names, home_config=HOME_CONFIG, debug=True, vis=args.vis)
+    robot_pybullet_controller, _ = initialize_robot_controller(URDF_PATH, base_link_name='base', tool_link_names=tool_link_names, home_config=HOME_CONFIG, debug=not args.realworld, vis=args.vis)
 
     box_pose_mat = np.eye(4)
     box_pose_mat[:3, 3] = [.6, 0, 1.1]
@@ -304,6 +342,7 @@ def grasping_test(args):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--vis', action='store_true', help='visualize pybullet')
+    parser.add_argument('--realworld', action='store_true', help='connect to real robot')
     args = parser.parse_args()
 
     goto_tgt(args)
